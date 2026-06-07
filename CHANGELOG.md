@@ -7,8 +7,8 @@
   preserved (the helper dropped both). stderr is kept on its own line rather than
   glued onto stdout. Adds 5xx poll-retry tolerance.
 - Switched tooling to **uv-first** (uv.lock, uv-based CI).
-- Integration suite now defaults to the `python:3.12-slim` image (ships
-  `python3`, `python`, and GNU `grep`, which the standard suite requires).
+- Documented the sandbox image requirement (`python3` + GNU `grep`), e.g.
+  `python:3.12-slim`, needed by the inherited filesystem tools.
 
 ## 0.0.1
 

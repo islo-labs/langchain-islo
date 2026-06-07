@@ -1,4 +1,4 @@
-.PHONY: format lint type typecheck test tests integration_test integration_tests test_watch help lint_package
+.PHONY: format lint type typecheck test tests test_watch help lint_package
 
 .DEFAULT_GOAL := help
 
@@ -9,18 +9,12 @@ UV_FROZEN = true
 # TESTING
 ######################
 
-TEST_FILE ?= tests/unit_tests/
+TEST_FILE ?= tests/unit_tests/ tests/test_import.py
 PYTEST_EXTRA ?=
-
-integration_test integration_tests: TEST_FILE=tests/integration_tests/
 
 test: ## Run unit tests
 test tests:
 	uv run --group test pytest -vvv $(PYTEST_EXTRA) --disable-socket --allow-unix-socket $(TEST_FILE)
-
-integration_test: ## Run integration tests
-integration_test integration_tests:
-	uv run --group test pytest -vvv --timeout 120 $(TEST_FILE)
 
 test_watch: ## Run tests in watch mode
 	uv run --group test ptw --now . -- -vv $(TEST_FILE)
