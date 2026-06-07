@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.0.3
+
+- `download_files`: when a download fails, classify the path inside the sandbox
+  so a directory is reported as `is_directory` and a missing path as
+  `file_not_found`, regardless of the provider's HTTP status. Fixes the
+  `SandboxIntegrationTests` directory-download case against live Islo, which
+  returns a generic `500` for directory downloads.
+
 ## 0.0.2
 
 - `execute()` now polls the Islo exec result directly instead of using the SDK's

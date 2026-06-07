@@ -278,13 +278,10 @@ class IsloSandbox(BaseSandbox):
                 response = self._files_request("GET", path)
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
+                # Protocol permits a backend-specific error string.
+                err = self._classify_download_error(path, exc.response.status_code)
                 responses.append(
-                    FileDownloadResponse(
-                        path=path,
-                        content=None,
-                        # Protocol permits a backend-specific error string.
-                        error=_map_http_status(exc.response.status_code),  # ty: ignore[invalid-argument-type]
-                    )
+                    FileDownloadResponse(path=path, content=None, error=err)  # ty: ignore[invalid-argument-type]
                 )
             except httpx.HTTPError as exc:
                 responses.append(
@@ -300,6 +297,27 @@ class IsloSandbox(BaseSandbox):
         return responses
 
     # -- internals -----------------------------------------------------------
+
+    def _classify_download_error(
+        self, path: str, status_code: int
+    ) -> FileOperationError | str:
+        """Disambiguate a failed download by inspecting the path in the sandbox.
+
+        Islo returns a generic ``500`` when asked to download a directory, so the
+        HTTP status alone can't distinguish ``is_directory`` from a real server
+        error. We probe the sandbox to report the most actionable error.
+        """
+        quoted = shlex.quote(path)
+        probe = self.execute(
+            f"if [ -d {quoted} ]; then echo dir; "
+            f"elif [ -e {quoted} ]; then echo file; else echo missing; fi"
+        )
+        verdict = probe.output.strip().splitlines()[-1] if probe.output.strip() else ""
+        if verdict == "dir":
+            return IS_DIRECTORY
+        if verdict == "missing":
+            return FILE_NOT_FOUND
+        return _map_http_status(status_code)
 
     def _files_request(
         self,
