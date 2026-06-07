@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.0.2
+
+- `execute()` now polls the Islo exec result directly instead of using the SDK's
+  `exec_and_wait` helper, so the real `exit_code` and the `truncated` flag are
+  preserved (the helper dropped both). stderr is kept on its own line rather than
+  glued onto stdout. Adds 5xx poll-retry tolerance.
+- Switched tooling to **uv-first** (uv.lock, uv-based CI).
+- Documented the sandbox image requirement (`python3` + GNU `grep`), e.g.
+  `python:3.12-slim`, needed by the inherited filesystem tools.
+
 ## 0.0.1
 
 Initial release.
