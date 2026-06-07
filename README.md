@@ -12,7 +12,8 @@ egress policies.
 ## Install
 
 ```bash
-pip install langchain-islo
+uv add langchain-islo
+# or: pip install langchain-islo
 ```
 
 Set your API key (keys look like `ak_...`):
@@ -20,6 +21,12 @@ Set your API key (keys look like `ak_...`):
 ```bash
 export ISLO_API_KEY="ak_..."
 ```
+
+> **Sandbox image requirement.** The inherited filesystem tools (`read`, `write`,
+> `edit`, `ls`, `glob`, `grep`) shell out to `python3` and GNU `grep` inside the
+> sandbox. Use an image that provides them (e.g. `python:3.12-slim`, or
+> `ubuntu`/`debian` with `python3` + `grep` installed). Alpine/BusyBox `grep`
+> lacks the flags these tools need.
 
 ## Usage
 
@@ -30,7 +37,7 @@ from islo import Islo
 from langchain_islo import IsloSandbox
 
 client = Islo()  # reads ISLO_API_KEY
-sandbox = client.sandboxes.create_sandbox(image="ubuntu:24.04")
+sandbox = client.sandboxes.create_sandbox(image="python:3.12-slim")
 
 backend = IsloSandbox(client=client, sandbox=sandbox)
 
@@ -50,7 +57,7 @@ print(backend.read("/workspace/app.py").file_data["content"])
 from langchain_islo import IsloProvider
 
 provider = IsloProvider()  # reads ISLO_API_KEY
-backend = provider.get_or_create(image="ubuntu:24.04")
+backend = provider.get_or_create(image="python:3.12-slim")
 try:
     print(backend.execute("uname -a").output)
 finally:

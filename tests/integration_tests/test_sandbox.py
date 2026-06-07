@@ -21,11 +21,16 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+# The standard suite drives the BaseSandbox filesystem tools, which shell out to
+# `python3`/`python` and GNU `grep`. Use an image that ships all three.
+_IMAGE = os.environ.get("ISLO_TEST_IMAGE", "python:3.12-slim")
+
+
 class TestIsloSandboxStandard(SandboxIntegrationTests):
     @pytest.fixture
     def sandbox(self) -> Iterator[SandboxBackendProtocol]:
         client = Islo()
-        sandbox = client.sandboxes.create_sandbox(image="ubuntu:24.04")
+        sandbox = client.sandboxes.create_sandbox(image=_IMAGE)
         backend = IsloSandbox(client=client, sandbox=sandbox)
         try:
             yield backend

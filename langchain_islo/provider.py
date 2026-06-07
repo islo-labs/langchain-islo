@@ -16,7 +16,9 @@ from islo import Islo
 
 from langchain_islo.sandbox import IsloSandbox
 
-_DEFAULT_IMAGE = "ubuntu:24.04"
+# Default image ships python3 + GNU grep, which the inherited filesystem tools
+# (read/write/edit/ls/glob/grep) rely on.
+_DEFAULT_IMAGE = "python:3.12-slim"
 
 
 class IsloProvider:
@@ -27,7 +29,7 @@ class IsloProvider:
         from langchain_islo import IsloProvider
 
         provider = IsloProvider(api_key="ak_...")
-        backend = provider.get_or_create(image="ubuntu:24.04")
+        backend = provider.get_or_create(image="python:3.12-slim")
         try:
             print(backend.execute("uname -a").output)
         finally:

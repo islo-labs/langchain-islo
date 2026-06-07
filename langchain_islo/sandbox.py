@@ -29,6 +29,7 @@ from __future__ import annotations
 import io
 import posixpath
 import shlex
+import time
 from typing import TYPE_CHECKING
 
 import httpx
@@ -43,15 +44,20 @@ from deepagents.backends.protocol import (
     FileUploadResponse,
 )
 from deepagents.backends.sandbox import BaseSandbox
-from islo.custom.exec import exec_and_wait_sync
+from islo.core.api_error import ApiError
 
 if TYPE_CHECKING:
     from islo import Islo
-    from islo.types import SandboxResponse
+    from islo.types import ExecResultResponse, SandboxResponse
 
 # Islo executes an argv list, not a shell line. deepagents emits shell command
 # strings (pipes, redirects, here-docs), so each command is run through `sh -c`.
 _SHELL: tuple[str, str] = ("/bin/sh", "-c")
+
+# Exec is asynchronous server-side: submit returns an exec_id, then we poll the
+# result until it reaches a terminal status.
+_TERMINAL_STATUSES = frozenset({"completed", "failed", "timeout"})
+_MAX_CONSECUTIVE_POLL_ERRORS = 5
 
 _TIMEOUT_EXIT_CODE = 124
 """Exit code returned when a command exceeds its timeout (matches `timeout(1)`)."""
@@ -74,7 +80,7 @@ class IsloSandbox(BaseSandbox):
         from langchain_islo import IsloSandbox
 
         client = Islo()  # reads ISLO_API_KEY
-        sandbox = client.sandboxes.create_sandbox(image="ubuntu:24.04")
+        sandbox = client.sandboxes.create_sandbox(image="python:3.12-slim")
         backend = IsloSandbox(client=client, sandbox=sandbox)
 
         result = backend.execute("echo hello")
@@ -141,35 +147,68 @@ class IsloSandbox(BaseSandbox):
         Returns:
             ``ExecuteResponse`` with combined stdout/stderr, the exit code, and a
             truncation flag.
+
+        Notes:
+            We poll the Islo exec result directly (rather than via the SDK's
+            ``exec_and_wait`` helper) so the real ``exit_code`` and the
+            ``truncated`` flag are preserved — the helper drops both.
         """
         effective_timeout = self._default_timeout if timeout is None else timeout
-        # The exec helper treats `timeout=None` as "poll indefinitely", which is
-        # the semantic deepagents assigns to a timeout of 0.
-        helper_timeout = None if effective_timeout == 0 else float(effective_timeout)
-
-        result = exec_and_wait_sync(
-            self._client,
-            self._sandbox.name,
-            [_SHELL[0], _SHELL[1], command],
-            timeout=helper_timeout,
-            poll_interval=self._poll_interval,
+        # A timeout of 0 means "wait indefinitely" (deepagents convention).
+        deadline = (
+            None if effective_timeout == 0 else time.monotonic() + effective_timeout
         )
 
-        if result.timed_out:
-            return ExecuteResponse(
-                output=f"Command timed out after {effective_timeout} seconds",
-                exit_code=_TIMEOUT_EXIT_CODE,
-                truncated=False,
-            )
+        sandboxes = self._client.sandboxes
+        submission = sandboxes.exec_in_sandbox(
+            self._sandbox.name,
+            command=[_SHELL[0], _SHELL[1], command],
+        )
+        exec_id = submission.exec_id
 
-        output = result.stdout
-        if result.stderr:
-            output = f"{output}{result.stderr}" if output else result.stderr
+        consecutive_errors = 0
+        while deadline is None or time.monotonic() < deadline:
+            try:
+                result = sandboxes.get_exec_result(self._sandbox.name, exec_id)
+                consecutive_errors = 0
+            except ApiError as exc:
+                status = exc.status_code
+                if (
+                    status is not None
+                    and status >= 500  # noqa: PLR2004  # transient server error
+                    and consecutive_errors < _MAX_CONSECUTIVE_POLL_ERRORS
+                ):
+                    consecutive_errors += 1
+                    time.sleep(self._poll_interval)
+                    continue
+                raise
+            if result.status in _TERMINAL_STATUSES:
+                return self._to_execute_response(result)
+            time.sleep(self._poll_interval)
+
+        return ExecuteResponse(
+            output=f"Command timed out after {effective_timeout} seconds",
+            exit_code=_TIMEOUT_EXIT_CODE,
+            truncated=False,
+        )
+
+    @staticmethod
+    def _to_execute_response(result: ExecResultResponse) -> ExecuteResponse:
+        """Map an Islo exec result into deepagents' ``ExecuteResponse``."""
+        # Keep stderr on its own line so it never corrupts stdout that callers
+        # parse (e.g. the BaseSandbox file-op scripts emit single-line JSON; they
+        # also redirect stderr server-side, so `stderr` is empty for those).
+        output = "\n".join(p for p in (result.stdout or "", result.stderr or "") if p)
+
+        exit_code = result.exit_code
+        if exit_code is None:
+            # Islo may omit the code on a terminal status; infer a sane value.
+            exit_code = 0 if result.status == "completed" else 1
 
         return ExecuteResponse(
             output=output,
-            exit_code=result.exit_code,
-            truncated=False,
+            exit_code=exit_code,
+            truncated=bool(getattr(result, "truncated", False)),
         )
 
     # -- file transfer -------------------------------------------------------
@@ -218,10 +257,11 @@ class IsloSandbox(BaseSandbox):
                 except httpx.HTTPStatusError as exc:
                     responses[idx] = FileUploadResponse(
                         path=path,
-                        error=_map_http_status(exc.response.status_code),
+                        # Protocol permits a backend-specific error string.
+                        error=_map_http_status(exc.response.status_code),  # ty: ignore[invalid-argument-type]
                     )
                 except httpx.HTTPError as exc:  # network/timeout errors
-                    responses[idx] = FileUploadResponse(path=path, error=str(exc))
+                    responses[idx] = FileUploadResponse(path=path, error=str(exc))  # ty: ignore[invalid-argument-type]
                 else:
                     responses[idx] = FileUploadResponse(path=path, error=None)
 
@@ -258,12 +298,13 @@ class IsloSandbox(BaseSandbox):
                         FileDownloadResponse(
                             path=path,
                             content=None,
-                            error=_map_http_status(exc.response.status_code),
+                            # Protocol permits a backend-specific error string.
+                            error=_map_http_status(exc.response.status_code),  # ty: ignore[invalid-argument-type]
                         )
                     )
                 except httpx.HTTPError as exc:
                     responses.append(
-                        FileDownloadResponse(path=path, content=None, error=str(exc))
+                        FileDownloadResponse(path=path, content=None, error=str(exc))  # ty: ignore[invalid-argument-type]
                     )
                 else:
                     responses.append(

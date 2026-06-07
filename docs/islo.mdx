@@ -33,7 +33,7 @@ from islo import Islo
 from langchain_islo import IsloSandbox
 
 client = Islo()  # reads ISLO_API_KEY
-sandbox = client.sandboxes.create_sandbox(image="ubuntu:24.04")
+sandbox = client.sandboxes.create_sandbox(image="python:3.12-slim")
 backend = IsloSandbox(client=client, sandbox=sandbox)
 
 result = backend.execute("echo hello")
@@ -50,7 +50,7 @@ from deepagents import create_deep_agent
 from langchain_islo import IsloSandbox
 
 client = Islo()
-sandbox = client.sandboxes.create_sandbox(image="ubuntu:24.04")
+sandbox = client.sandboxes.create_sandbox(image="python:3.12-slim")
 backend = IsloSandbox(client=client, sandbox=sandbox)
 
 agent = create_deep_agent(

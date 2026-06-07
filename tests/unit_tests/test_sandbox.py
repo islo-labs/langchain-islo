@@ -5,11 +5,28 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
-from islo.custom.exec import ExecResult
+from islo.core.api_error import ApiError
 
 from langchain_islo.sandbox import IsloSandbox, _map_http_status
 
 TIMEOUT_EXIT_CODE = 124
+
+
+def _exec_result(
+    *,
+    status: str = "completed",
+    stdout: str = "",
+    stderr: str = "",
+    exit_code: int | None = 0,
+    truncated: bool = False,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        status=status,
+        stdout=stdout,
+        stderr=stderr,
+        exit_code=exit_code,
+        truncated=truncated,
+    )
 
 
 def _make_sandbox() -> tuple[IsloSandbox, MagicMock]:
@@ -32,48 +49,106 @@ def test_id_and_name() -> None:
 
 
 def test_execute_combines_stdout_and_stderr() -> None:
-    sb, _ = _make_sandbox()
-    with patch("langchain_islo.sandbox.exec_and_wait_sync") as mock_exec:
-        mock_exec.return_value = ExecResult(stdout="out", stderr="err", exit_code=0)
-        result = sb.execute("echo hi")
+    sb, client = _make_sandbox()
+    client.sandboxes.exec_in_sandbox.return_value = SimpleNamespace(exec_id="e1")
+    client.sandboxes.get_exec_result.return_value = _exec_result(
+        stdout="out", stderr="err", exit_code=0
+    )
+    result = sb.execute("echo hi")
 
-    assert result.output == "outerr"
+    # stderr is kept on its own line (never glued onto stdout).
+    assert result.output == "out\nerr"
     assert result.exit_code == 0
     assert result.truncated is False
 
     # Command must be wrapped in a shell so pipes/redirects/here-docs work.
-    args, _ = mock_exec.call_args
-    assert args[0] is sb._client
-    assert args[1] == "my-sandbox"
-    assert args[2] == ["/bin/sh", "-c", "echo hi"]
+    args, kwargs = client.sandboxes.exec_in_sandbox.call_args
+    assert args[0] == "my-sandbox"
+    assert kwargs["command"] == ["/bin/sh", "-c", "echo hi"]
 
 
 def test_execute_stdout_only() -> None:
-    sb, _ = _make_sandbox()
-    with patch("langchain_islo.sandbox.exec_and_wait_sync") as mock_exec:
-        mock_exec.return_value = ExecResult(stdout="hello", stderr="", exit_code=0)
-        result = sb.execute("echo hello")
+    sb, client = _make_sandbox()
+    client.sandboxes.exec_in_sandbox.return_value = SimpleNamespace(exec_id="e1")
+    client.sandboxes.get_exec_result.return_value = _exec_result(stdout="hello")
+    result = sb.execute("echo hello")
     assert result.output == "hello"
 
 
+def test_execute_propagates_truncated_flag() -> None:
+    sb, client = _make_sandbox()
+    client.sandboxes.exec_in_sandbox.return_value = SimpleNamespace(exec_id="e1")
+    client.sandboxes.get_exec_result.return_value = _exec_result(
+        stdout="x" * 100, truncated=True
+    )
+    result = sb.execute("cat big")
+    assert result.truncated is True
+
+
+def test_execute_exit_code_none_completed_defaults_zero() -> None:
+    sb, client = _make_sandbox()
+    client.sandboxes.exec_in_sandbox.return_value = SimpleNamespace(exec_id="e1")
+    client.sandboxes.get_exec_result.return_value = _exec_result(
+        status="completed", exit_code=None
+    )
+    assert sb.execute("true").exit_code == 0
+
+
+def test_execute_exit_code_none_failed_defaults_nonzero() -> None:
+    sb, client = _make_sandbox()
+    client.sandboxes.exec_in_sandbox.return_value = SimpleNamespace(exec_id="e1")
+    client.sandboxes.get_exec_result.return_value = _exec_result(
+        status="failed", exit_code=None
+    )
+    assert sb.execute("false").exit_code == 1
+
+
+def test_execute_polls_until_terminal() -> None:
+    sb, client = _make_sandbox()
+    client.sandboxes.exec_in_sandbox.return_value = SimpleNamespace(exec_id="e1")
+    client.sandboxes.get_exec_result.side_effect = [
+        _exec_result(status="running", exit_code=None),
+        _exec_result(status="completed", stdout="done"),
+    ]
+    with patch("langchain_islo.sandbox.time.sleep"):
+        result = sb.execute("slow")
+    assert result.output == "done"
+    assert client.sandboxes.get_exec_result.call_count == 2
+
+
+def test_execute_retries_on_server_error() -> None:
+    sb, client = _make_sandbox()
+    client.sandboxes.exec_in_sandbox.return_value = SimpleNamespace(exec_id="e1")
+    client.sandboxes.get_exec_result.side_effect = [
+        ApiError(status_code=503, headers={}, body="boom"),
+        _exec_result(status="completed", stdout="ok"),
+    ]
+    with patch("langchain_islo.sandbox.time.sleep"):
+        result = sb.execute("x")
+    assert result.output == "ok"
+
+
 def test_execute_timeout_maps_to_124() -> None:
-    sb, _ = _make_sandbox()
-    with patch("langchain_islo.sandbox.exec_and_wait_sync") as mock_exec:
-        mock_exec.return_value = ExecResult(
-            stdout="", stderr="", exit_code=-1, timed_out=True
-        )
+    sb, client = _make_sandbox()
+    client.sandboxes.exec_in_sandbox.return_value = SimpleNamespace(exec_id="e1")
+    client.sandboxes.get_exec_result.return_value = _exec_result(
+        status="running", exit_code=None
+    )
+    with (
+        patch("langchain_islo.sandbox.time.monotonic", side_effect=[0.0, 11.0]),
+        patch("langchain_islo.sandbox.time.sleep"),
+    ):
         result = sb.execute("sleep 999", timeout=5)
     assert result.exit_code == TIMEOUT_EXIT_CODE
     assert "timed out" in result.output
 
 
-def test_execute_timeout_zero_means_wait_forever() -> None:
-    sb, _ = _make_sandbox()
-    with patch("langchain_islo.sandbox.exec_and_wait_sync") as mock_exec:
-        mock_exec.return_value = ExecResult(stdout="", stderr="", exit_code=0)
-        sb.execute("echo hi", timeout=0)
-    _, kwargs = mock_exec.call_args
-    assert kwargs["timeout"] is None
+def test_execute_timeout_zero_polls_until_terminal() -> None:
+    sb, client = _make_sandbox()
+    client.sandboxes.exec_in_sandbox.return_value = SimpleNamespace(exec_id="e1")
+    client.sandboxes.get_exec_result.return_value = _exec_result(stdout="ok")
+    result = sb.execute("echo hi", timeout=0)
+    assert result.output == "ok"
 
 
 def test_upload_rejects_relative_path() -> None:
