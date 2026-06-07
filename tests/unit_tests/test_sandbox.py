@@ -160,17 +160,12 @@ def test_upload_rejects_relative_path() -> None:
 
 
 def test_upload_success_creates_parents_and_posts() -> None:
-    sb, _ = _make_sandbox()
-    http = MagicMock()
-    http.__enter__.return_value = http
+    sb, client = _make_sandbox()
     response = MagicMock()
     response.raise_for_status.return_value = None
-    http.post.return_value = response
+    client._client_wrapper.httpx_client.request.return_value = response
 
-    with (
-        patch("langchain_islo.sandbox.httpx.Client", return_value=http),
-        patch.object(sb, "execute") as mock_execute,
-    ):
+    with patch.object(sb, "execute") as mock_execute:
         responses = sb.upload_files([("/workspace/app.py", b"print('hi')")])
 
     assert responses[0].error is None
@@ -178,28 +173,25 @@ def test_upload_success_creates_parents_and_posts() -> None:
     mkdir_cmd = mock_execute.call_args[0][0]
     assert mkdir_cmd.startswith("mkdir -p ")
     assert "/workspace" in mkdir_cmd
-    # The POST hits the compute files endpoint with the path param.
-    url = http.post.call_args[0][0]
-    assert url == "https://ca.compute.islo.dev/sandboxes/my-sandbox/files"
-    assert http.post.call_args[1]["params"] == {"path": "/workspace/app.py"}
+    # The request goes through the SDK's HTTP client to the files endpoint.
+    args, kwargs = client._client_wrapper.httpx_client.request.call_args
+    assert args[0] == "sandboxes/my-sandbox/files"
+    assert kwargs["method"] == "POST"
+    assert kwargs["params"] == {"path": "/workspace/app.py"}
+    assert "file" in kwargs["files"]
 
 
 def test_upload_partial_success() -> None:
-    sb, _ = _make_sandbox()
-    http = MagicMock()
-    http.__enter__.return_value = http
+    sb, client = _make_sandbox()
     ok = MagicMock()
     ok.raise_for_status.return_value = None
     bad_response = MagicMock(status_code=403)
     err = httpx.HTTPStatusError("forbidden", request=MagicMock(), response=bad_response)
     bad = MagicMock()
     bad.raise_for_status.side_effect = err
-    http.post.side_effect = [ok, bad]
+    client._client_wrapper.httpx_client.request.side_effect = [ok, bad]
 
-    with (
-        patch("langchain_islo.sandbox.httpx.Client", return_value=http),
-        patch.object(sb, "execute"),
-    ):
+    with patch.object(sb, "execute"):
         responses = sb.upload_files([("/ok.txt", b"a"), ("/denied.txt", b"b")])
 
     assert responses[0].error is None
@@ -207,32 +199,29 @@ def test_upload_partial_success() -> None:
 
 
 def test_download_success_returns_bytes() -> None:
-    sb, _ = _make_sandbox()
-    http = MagicMock()
-    http.__enter__.return_value = http
+    sb, client = _make_sandbox()
     response = MagicMock(content=b"file-bytes")
     response.raise_for_status.return_value = None
-    http.get.return_value = response
+    client._client_wrapper.httpx_client.request.return_value = response
 
-    with patch("langchain_islo.sandbox.httpx.Client", return_value=http):
-        responses = sb.download_files(["/workspace/app.py"])
+    responses = sb.download_files(["/workspace/app.py"])
 
     assert responses[0].content == b"file-bytes"
     assert responses[0].error is None
+    args, kwargs = client._client_wrapper.httpx_client.request.call_args
+    assert args[0] == "sandboxes/my-sandbox/files"
+    assert kwargs["method"] == "GET"
 
 
 def test_download_not_found() -> None:
-    sb, _ = _make_sandbox()
-    http = MagicMock()
-    http.__enter__.return_value = http
+    sb, client = _make_sandbox()
     missing = MagicMock(status_code=404)
     err = httpx.HTTPStatusError("nope", request=MagicMock(), response=missing)
     response = MagicMock()
     response.raise_for_status.side_effect = err
-    http.get.return_value = response
+    client._client_wrapper.httpx_client.request.return_value = response
 
-    with patch("langchain_islo.sandbox.httpx.Client", return_value=http):
-        responses = sb.download_files(["/missing.txt"])
+    responses = sb.download_files(["/missing.txt"])
 
     assert responses[0].content is None
     assert responses[0].error == "file_not_found"

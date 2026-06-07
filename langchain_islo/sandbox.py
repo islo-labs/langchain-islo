@@ -19,14 +19,13 @@ Notes:
     ``["/bin/sh", "-c", command]``.
 
     Islo's generated ``upload_file`` / ``download_file`` SDK methods do not carry
-    file bytes, so byte transfer is performed against the sandbox files endpoint
-    on the *compute* base URL, reusing the client's resolved auth headers (the
-    same approach used by the Islo SDK's own ``islo.custom.files`` helpers).
+    file bytes, so byte transfer is driven through the SDK's own HTTP client
+    (``client._client_wrapper.httpx_client``) against the sandbox files endpoint,
+    reusing the SDK's auth, base URL, retry, and timeout handling.
 """
 
 from __future__ import annotations
 
-import io
 import posixpath
 import shlex
 import time
@@ -95,7 +94,7 @@ class IsloSandbox(BaseSandbox):
         sandbox: SandboxResponse,
         timeout: int = 30 * 60,
         poll_interval: float = 0.5,
-        http_timeout: float = 60.0,
+        http_timeout: int = 60,
     ) -> None:
         """Wrap an existing Islo sandbox.
 
@@ -241,29 +240,23 @@ class IsloSandbox(BaseSandbox):
             quoted = " ".join(shlex.quote(d) for d in parents)
             self.execute(f"mkdir -p {quoted}")
 
-        base_url = self._compute_base_url()
-        headers = self._auth_headers()
-        with httpx.Client(timeout=self._http_timeout) as http:
-            for idx, path, content in pending:
-                filename = posixpath.basename(path) or "file"
-                try:
-                    response = http.post(
-                        f"{base_url}/sandboxes/{self._sandbox.name}/files",
-                        params={"path": path},
-                        headers=headers,
-                        files={"file": (filename, io.BytesIO(content))},
-                    )
-                    response.raise_for_status()
-                except httpx.HTTPStatusError as exc:
-                    responses[idx] = FileUploadResponse(
-                        path=path,
-                        # Protocol permits a backend-specific error string.
-                        error=_map_http_status(exc.response.status_code),  # ty: ignore[invalid-argument-type]
-                    )
-                except httpx.HTTPError as exc:  # network/timeout errors
-                    responses[idx] = FileUploadResponse(path=path, error=str(exc))  # ty: ignore[invalid-argument-type]
-                else:
-                    responses[idx] = FileUploadResponse(path=path, error=None)
+        for idx, path, content in pending:
+            filename = posixpath.basename(path) or "file"
+            try:
+                response = self._files_request(
+                    "POST", path, files={"file": (filename, content)}
+                )
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                responses[idx] = FileUploadResponse(
+                    path=path,
+                    # Protocol permits a backend-specific error string.
+                    error=_map_http_status(exc.response.status_code),  # ty: ignore[invalid-argument-type]
+                )
+            except httpx.HTTPError as exc:  # network/timeout errors
+                responses[idx] = FileUploadResponse(path=path, error=str(exc))  # ty: ignore[invalid-argument-type]
+            else:
+                responses[idx] = FileUploadResponse(path=path, error=None)
 
         return [r for r in responses if r is not None]
 
@@ -274,56 +267,63 @@ class IsloSandbox(BaseSandbox):
         corresponding ``FileDownloadResponse`` rather than raised.
         """
         responses: list[FileDownloadResponse] = []
-        base_url = self._compute_base_url()
-        headers = self._auth_headers()
 
-        with httpx.Client(timeout=self._http_timeout) as http:
-            for path in paths:
-                if not path.startswith("/"):
-                    responses.append(
-                        FileDownloadResponse(
-                            path=path, content=None, error=INVALID_PATH
-                        )
+        for path in paths:
+            if not path.startswith("/"):
+                responses.append(
+                    FileDownloadResponse(path=path, content=None, error=INVALID_PATH)
+                )
+                continue
+            try:
+                response = self._files_request("GET", path)
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                responses.append(
+                    FileDownloadResponse(
+                        path=path,
+                        content=None,
+                        # Protocol permits a backend-specific error string.
+                        error=_map_http_status(exc.response.status_code),  # ty: ignore[invalid-argument-type]
                     )
-                    continue
-                try:
-                    response = http.get(
-                        f"{base_url}/sandboxes/{self._sandbox.name}/files",
-                        params={"path": path},
-                        headers=headers,
+                )
+            except httpx.HTTPError as exc:
+                responses.append(
+                    FileDownloadResponse(path=path, content=None, error=str(exc))  # ty: ignore[invalid-argument-type]
+                )
+            else:
+                responses.append(
+                    FileDownloadResponse(
+                        path=path, content=response.content, error=None
                     )
-                    response.raise_for_status()
-                except httpx.HTTPStatusError as exc:
-                    responses.append(
-                        FileDownloadResponse(
-                            path=path,
-                            content=None,
-                            # Protocol permits a backend-specific error string.
-                            error=_map_http_status(exc.response.status_code),  # ty: ignore[invalid-argument-type]
-                        )
-                    )
-                except httpx.HTTPError as exc:
-                    responses.append(
-                        FileDownloadResponse(path=path, content=None, error=str(exc))  # ty: ignore[invalid-argument-type]
-                    )
-                else:
-                    responses.append(
-                        FileDownloadResponse(
-                            path=path, content=response.content, error=None
-                        )
-                    )
+                )
 
         return responses
 
     # -- internals -----------------------------------------------------------
 
-    def _compute_base_url(self) -> str:
-        """Resolve the Islo *compute* base URL hosting the exec/files endpoints."""
-        return self._client._client_wrapper.get_environment().compute.rstrip("/")
+    def _files_request(
+        self,
+        method: str,
+        path: str,
+        *,
+        files: dict | None = None,
+    ) -> httpx.Response:
+        """Call the sandbox files endpoint via the Islo SDK's HTTP client.
 
-    def _auth_headers(self) -> dict[str, str]:
-        """Resolve fresh auth headers (honors token refresh) for raw requests."""
-        return self._client._client_wrapper.get_headers()
+        Reuses the SDK's configured transport (auth headers, base URL, retries,
+        timeout) instead of issuing raw requests. The generated
+        ``upload_file``/``download_file`` SDK methods don't carry file bytes, so
+        we drive the same endpoint through ``client._client_wrapper.httpx_client``.
+        """
+        wrapper = self._client._client_wrapper
+        return wrapper.httpx_client.request(
+            f"sandboxes/{self._sandbox.name}/files",
+            method=method,
+            base_url=wrapper.get_environment().compute,
+            params={"path": path},
+            files=files,
+            request_options={"timeout_in_seconds": self._http_timeout},
+        )
 
 
 def _map_http_status(status_code: int) -> FileOperationError | str:
