@@ -16,6 +16,9 @@ test: ## Run unit tests
 test tests:
 	uv run --group test pytest -vvv $(PYTEST_EXTRA) --disable-socket --allow-unix-socket $(TEST_FILE)
 
+integration_test integration_tests: ## Run live standard suite (needs ISLO_API_KEY)
+	uv run --group test pytest -vvv --timeout 300 -o asyncio_mode=auto tests/integration_tests/
+
 test_watch: ## Run tests in watch mode
 	uv run --group test ptw --now . -- -vv $(TEST_FILE)
 
