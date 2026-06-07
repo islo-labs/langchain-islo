@@ -22,6 +22,6 @@ jobs:
       - name: Sync (locked)
         run: uv sync --locked --group test
       - name: Standard suite (live)
-        run: uv run pytest tests/integration_tests -q --timeout 180
+        run: uv run --group test pytest tests/integration_tests -q --timeout 180
         env:
           ISLO_API_KEY: ${{ secrets.ISLO_API_KEY }}

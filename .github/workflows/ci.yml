@@ -17,6 +17,8 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -27,9 +29,9 @@ jobs:
         run: uv sync --locked --group test
       - name: Lint
         run: |
-          uv run ruff check langchain_islo tests
-          uv run ruff format langchain_islo tests --diff
+          uv run --group test ruff check langchain_islo tests
+          uv run --group test ruff format langchain_islo tests --diff
+      - name: Type check
+        run: uv run --group test ty check langchain_islo
       - name: Unit tests
-        run: uv run pytest tests/unit_tests tests/test_import.py -q --disable-socket --allow-unix-socket
-        env:
-          UV_PYTHON: ${{ matrix.python-version }}
+        run: uv run --group test pytest tests/unit_tests tests/test_import.py -q --disable-socket --allow-unix-socket
