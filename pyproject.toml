@@ -1,0 +1,91 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "langchain-islo"
+description = "Islo (islo.dev) sandbox integration for Deep Agents"
+license = { text = "MIT" }
+readme = "README.md"
+authors = [{ name = "Islo" }]
+keywords = ["deepagents", "langchain", "sandbox", "islo", "agents"]
+
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+version = "0.0.1"
+requires-python = ">=3.11,<4.0"
+dependencies = [
+    "deepagents>=0.6.8,<0.7.0",
+    "islo>=0.3.3",
+    "httpx>=0.21.2",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["langchain_islo"]
+
+[project.urls]
+Homepage = "https://github.com/islo-labs/langchain-islo"
+Repository = "https://github.com/islo-labs/langchain-islo"
+Documentation = "https://docs.islo.dev"
+"Issue Tracker" = "https://github.com/islo-labs/langchain-islo/issues"
+
+[dependency-groups]
+test = [
+    "pytest>=8.3.4,<10.0.0",
+    "pytest-cov",
+    "pytest-socket",
+    "pytest-xdist",
+    "pytest-timeout>=2.3.1,<3.0.0",
+    "pytest-asyncio>=1.3.0",
+    "ruff>=0.14.0,<1.0.0",
+    "ty>=0.0.1,<1.0.0",
+    "langchain-tests>=1.1.6",
+]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "COM812",  # Messes with the formatter
+    "ISC001",  # Messes with the formatter
+    "ANN401",  # Dynamically typed expressions (typing.Any) — needed for **kwargs passthrough
+    "SLF001",  # Private member access — required to reuse the Islo client's resolved env/headers
+    "FBT001",  # Boolean positional arg — inherited signature shape from deepagents
+    "FBT002",  # Boolean default positional arg
+]
+extend-safe-fixes = ["PLR6201"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+ignore-var-parameters = true
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.lint.extend-per-file-ignores]
+"tests/**/*.py" = ["D", "S101", "SLF001", "PLR2004"]
+
+[tool.coverage.run]
+omit = ["tests/*"]
+
+[tool.pytest.ini_options]
+addopts = "--strict-markers --strict-config --durations=5"
+testpaths = ["tests"]
+markers = [
+    "requires: mark tests as requiring a specific library",
+    "compile: mark placeholder test used to compile integration tests without running them",
+    "scheduled: mark tests to run in scheduled testing",
+]
+asyncio_mode = "auto"
+filterwarnings = []
