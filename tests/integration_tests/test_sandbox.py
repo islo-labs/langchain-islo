@@ -49,7 +49,9 @@ class TestIsloSandboxStandard(SandboxIntegrationTests):
             if status in _READY_STATES:
                 break
             time.sleep(2)
-        backend = IsloSandbox(client=client, sandbox=sb, poll_interval=1.0, timeout=120)
+        backend = IsloSandbox(
+            client=client, sandbox=sb, sync_polling_interval=1.0, timeout=120
+        )
         try:
             yield backend
         finally:

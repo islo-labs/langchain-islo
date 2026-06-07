@@ -29,7 +29,8 @@ from __future__ import annotations
 import posixpath
 import shlex
 import time
-from typing import TYPE_CHECKING
+from collections.abc import Callable
+from typing import TYPE_CHECKING, cast
 
 import httpx
 from deepagents.backends.protocol import (
@@ -48,6 +49,11 @@ from islo.core.api_error import ApiError
 if TYPE_CHECKING:
     from islo import Islo
     from islo.types import ExecResultResponse, SandboxResponse
+
+# Mirrors the DaytonaSandbox interface: a fixed delay, or a callable that
+# receives elapsed execution time (seconds) and returns the next poll delay.
+SyncPollingInterval = float | Callable[[float], float]
+PollingStrategy = Callable[[float], float]
 
 # Islo executes an argv list, not a shell line. deepagents emits shell command
 # strings (pipes, redirects, here-docs), so each command is run through `sh -c`.
@@ -93,29 +99,42 @@ class IsloSandbox(BaseSandbox):
         client: Islo,
         sandbox: SandboxResponse,
         timeout: int = 30 * 60,
-        poll_interval: float = 0.5,
+        sync_polling_interval: SyncPollingInterval = 0.5,
         http_timeout: int = 60,
     ) -> None:
         """Wrap an existing Islo sandbox.
 
+        Mirrors the ``DaytonaSandbox`` interface (``timeout`` +
+        ``sync_polling_interval``), with an extra ``client`` because Islo's
+        ``SandboxResponse`` is a data object — operations live on
+        ``client.sandboxes`` and are keyed by ``sandbox.name``.
+
         Args:
             client: An authenticated ``islo.Islo`` client.
             sandbox: An Islo ``SandboxResponse`` (e.g. from
-                ``client.sandboxes.create_sandbox(...)``). Sandbox operations are
-                keyed by ``sandbox.name``.
+                ``client.sandboxes.create_sandbox(...)``).
             timeout: Default command timeout in seconds used by ``execute()``
                 when no explicit timeout is given. A value of ``0`` waits
                 indefinitely.
-            poll_interval: Seconds between polls of the exec result while waiting
-                for a command to finish.
+            sync_polling_interval: Delay in seconds between polls of the exec
+                result, or a callable that receives elapsed execution time in
+                seconds and returns the next polling delay.
             http_timeout: Per-request timeout in seconds for file
                 upload/download transfers.
         """
         self._client = client
         self._sandbox = sandbox
         self._default_timeout = timeout
-        self._poll_interval = poll_interval
         self._http_timeout = http_timeout
+        polling_strategy: PollingStrategy
+        if callable(sync_polling_interval):
+            polling_strategy = cast("PollingStrategy", sync_polling_interval)
+        else:
+
+            def polling_strategy(_elapsed: float) -> float:
+                return sync_polling_interval
+
+        self._sync_polling_interval = polling_strategy
 
     @property
     def id(self) -> str:
@@ -153,12 +172,9 @@ class IsloSandbox(BaseSandbox):
             ``truncated`` flag are preserved — the helper drops both.
         """
         effective_timeout = self._default_timeout if timeout is None else timeout
-        # A timeout of 0 means "wait indefinitely" (deepagents convention).
-        deadline = (
-            None if effective_timeout == 0 else time.monotonic() + effective_timeout
-        )
 
         sandboxes = self._client.sandboxes
+        started_at = time.monotonic()
         submission = sandboxes.exec_in_sandbox(
             self._sandbox.name,
             command=[_SHELL[0], _SHELL[1], command],
@@ -166,7 +182,15 @@ class IsloSandbox(BaseSandbox):
         exec_id = submission.exec_id
 
         consecutive_errors = 0
-        while deadline is None or time.monotonic() < deadline:
+        while True:
+            elapsed = time.monotonic() - started_at
+            # A timeout of 0 means "wait indefinitely" (matches DaytonaSandbox).
+            if effective_timeout != 0 and elapsed >= effective_timeout:
+                return ExecuteResponse(
+                    output=f"Command timed out after {effective_timeout} seconds",
+                    exit_code=_TIMEOUT_EXIT_CODE,
+                    truncated=False,
+                )
             try:
                 result = sandboxes.get_exec_result(self._sandbox.name, exec_id)
                 consecutive_errors = 0
@@ -178,26 +202,26 @@ class IsloSandbox(BaseSandbox):
                     and consecutive_errors < _MAX_CONSECUTIVE_POLL_ERRORS
                 ):
                     consecutive_errors += 1
-                    time.sleep(self._poll_interval)
+                    time.sleep(self._sync_polling_interval(elapsed))
                     continue
                 raise
             if result.status in _TERMINAL_STATUSES:
                 return self._to_execute_response(result)
-            time.sleep(self._poll_interval)
-
-        return ExecuteResponse(
-            output=f"Command timed out after {effective_timeout} seconds",
-            exit_code=_TIMEOUT_EXIT_CODE,
-            truncated=False,
-        )
+            time.sleep(self._sync_polling_interval(elapsed))
 
     @staticmethod
     def _to_execute_response(result: ExecResultResponse) -> ExecuteResponse:
-        """Map an Islo exec result into deepagents' ``ExecuteResponse``."""
-        # Keep stderr on its own line so it never corrupts stdout that callers
-        # parse (e.g. the BaseSandbox file-op scripts emit single-line JSON; they
-        # also redirect stderr server-side, so `stderr` is empty for those).
-        output = "\n".join(p for p in (result.stdout or "", result.stderr or "") if p)
+        """Map an Islo exec result into deepagents' ``ExecuteResponse``.
+
+        Matches ``DaytonaSandbox``'s output convention: stdout, with any stderr
+        appended in a ``<stderr>...</stderr>`` block. The BaseSandbox file-op
+        scripts redirect stderr server-side, so ``stderr`` is empty for those and
+        their single-line JSON on stdout is never disturbed.
+        """
+        output = result.stdout or ""
+        stderr = result.stderr or ""
+        if stderr.strip():
+            output += f"\n<stderr>{stderr.strip()}</stderr>"
 
         exit_code = result.exit_code
         if exit_code is None:

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.0.4
+
+- Interface parity with the reference `DaytonaSandbox`: the poll knob is now
+  `sync_polling_interval` (a fixed delay **or** a callable of elapsed seconds),
+  and `execute()` formats stderr as a `<stderr>...</stderr>` block appended to
+  stdout — matching the other partner sandboxes. (`poll_interval` is renamed to
+  `sync_polling_interval`.)
+
 ## 0.0.3
 
 - `download_files`: when a download fails, classify the path inside the sandbox

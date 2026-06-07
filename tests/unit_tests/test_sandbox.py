@@ -56,8 +56,8 @@ def test_execute_combines_stdout_and_stderr() -> None:
     )
     result = sb.execute("echo hi")
 
-    # stderr is kept on its own line (never glued onto stdout).
-    assert result.output == "out\nerr"
+    # stderr is appended in a <stderr> block (matches DaytonaSandbox).
+    assert result.output == "out\n<stderr>err</stderr>"
     assert result.exit_code == 0
     assert result.truncated is False
 
