@@ -50,8 +50,8 @@ if TYPE_CHECKING:
     from islo import Islo
     from islo.types import ExecResultResponse, SandboxResponse
 
-# Mirrors the DaytonaSandbox interface: a fixed delay, or a callable that
-# receives elapsed execution time (seconds) and returns the next poll delay.
+# A fixed delay, or a callable that receives elapsed execution time (seconds)
+# and returns the next poll delay.
 SyncPollingInterval = float | Callable[[float], float]
 PollingStrategy = Callable[[float], float]
 
@@ -104,10 +104,9 @@ class IsloSandbox(BaseSandbox):
     ) -> None:
         """Wrap an existing Islo sandbox.
 
-        Mirrors the ``DaytonaSandbox`` interface (``timeout`` +
-        ``sync_polling_interval``), with an extra ``client`` because Islo's
-        ``SandboxResponse`` is a data object — operations live on
-        ``client.sandboxes`` and are keyed by ``sandbox.name``.
+        Takes ``client`` and ``sandbox`` because Islo's ``SandboxResponse`` is a
+        data object — operations live on ``client.sandboxes`` and are keyed by
+        ``sandbox.name``.
 
         Args:
             client: An authenticated ``islo.Islo`` client.
@@ -184,7 +183,7 @@ class IsloSandbox(BaseSandbox):
         consecutive_errors = 0
         while True:
             elapsed = time.monotonic() - started_at
-            # A timeout of 0 means "wait indefinitely" (matches DaytonaSandbox).
+            # A timeout of 0 means "wait indefinitely" (deepagents convention).
             if effective_timeout != 0 and elapsed >= effective_timeout:
                 return ExecuteResponse(
                     output=f"Command timed out after {effective_timeout} seconds",
@@ -213,10 +212,10 @@ class IsloSandbox(BaseSandbox):
     def _to_execute_response(result: ExecResultResponse) -> ExecuteResponse:
         """Map an Islo exec result into deepagents' ``ExecuteResponse``.
 
-        Matches ``DaytonaSandbox``'s output convention: stdout, with any stderr
-        appended in a ``<stderr>...</stderr>`` block. The BaseSandbox file-op
-        scripts redirect stderr server-side, so ``stderr`` is empty for those and
-        their single-line JSON on stdout is never disturbed.
+        Output is stdout, with any stderr appended in a ``<stderr>...</stderr>``
+        block. The BaseSandbox file-op scripts redirect stderr server-side, so
+        ``stderr`` is empty for those and their single-line JSON on stdout is
+        never disturbed.
         """
         output = result.stdout or ""
         stderr = result.stderr or ""

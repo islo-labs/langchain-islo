@@ -27,12 +27,11 @@ export ISLO_API_KEY="ak_..."
 > sandbox. Use an image that provides them (e.g. `python:3.12-slim`, or
 > `ubuntu`/`debian` with `python3` + `grep` installed). Alpine/BusyBox `grep`
 > lacks the flags these tools need. Islo's default `islo-runner` image ships GNU
-> `grep` but **not** `python3`, so pass an explicit image.
+> `grep` but **not** `python3`, so pass an explicit image (e.g. `python:3.12-slim`).
 >
-> A ready-made image (python3 + GNU grep + git/curl) is published at
-> [`kokoyossi/langchain-islo-sandbox`](https://hub.docker.com/r/kokoyossi/langchain-islo-sandbox)
-> — built from [`docker/Dockerfile`](docker/Dockerfile). Verified end-to-end
-> against live Islo (full `SandboxIntegrationTests` suite).
+> [`docker/Dockerfile`](docker/Dockerfile) builds an `islo-runner`-based image
+> with `python3` added — the recommended sandbox image (build it where the
+> `islo-runner` base is pullable).
 
 ## Usage
 
