@@ -30,8 +30,13 @@ export ISLO_API_KEY="ak_..."
 > `grep` but **not** `python3`, so pass an explicit image (e.g. `python:3.12-slim`).
 >
 > [`docker/Dockerfile`](docker/Dockerfile) builds an `islo-runner`-based image
-> with `python3` added — the recommended sandbox image (build it where the
-> `islo-runner` base is pullable).
+> with `python3` added — the recommended sandbox image. The base is a
+> `BASE_IMAGE` build arg (default `islo-runner:latest`); CI builds it against a
+> public base to verify the `python3` + GNU `grep` contract:
+>
+> ```bash
+> docker build --build-arg BASE_IMAGE=python:3.12-slim -f docker/Dockerfile .
+> ```
 
 ## Usage
 

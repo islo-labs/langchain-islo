@@ -5,9 +5,11 @@
 # but not python3, so this image adds python3 on top of it — keeping all of
 # islo-runner's capabilities.
 #
-# NOTE: islo-runner lives in Islo's registry; build this where that base image
-# is pullable (e.g. Islo CI). Adjust the tag/registry of the FROM line to match.
-FROM islo-runner:latest
+# The base image is a build arg so this can be verified against a public base
+# (e.g. `--build-arg BASE_IMAGE=python:3.12-slim`) in CI, while the default
+# builds on `islo-runner` in Islo's infra where that image is pullable.
+ARG BASE_IMAGE=islo-runner:latest
+FROM ${BASE_IMAGE}
 
 # Ensure python3 is present, regardless of the base distro.
 RUN set -eux; \
@@ -23,4 +25,6 @@ RUN set -eux; \
     else \
         echo "no supported package manager to install python3" >&2; exit 1; \
     fi; \
-    python3 --version
+    # Verify the contract Deep Agents relies on: python3 + GNU grep.
+    python3 --version; \
+    grep --version | head -1
