@@ -1,0 +1,29 @@
+name: Integration
+
+# Runs the deepagents SandboxIntegrationTests standard suite against a real
+# Islo sandbox. Manual trigger only — requires the ISLO_API_KEY repo secret.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    name: Live standard suite (api.islo.dev)
+    runs-on: ubuntu-latest
+    env:
+      UV_PYTHON: "3.12"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Sync (locked)
+        run: uv sync --locked --group test
+      - name: Standard suite (live)
+        run: uv run --group test pytest tests/integration_tests -q --timeout 300 -o asyncio_mode=auto
+        env:
+          ISLO_API_KEY: ${{ secrets.ISLO_API_KEY }}

@@ -56,8 +56,8 @@ def test_execute_combines_stdout_and_stderr() -> None:
     )
     result = sb.execute("echo hi")
 
-    # stderr is kept on its own line (never glued onto stdout).
-    assert result.output == "out\nerr"
+    # stderr is appended in a <stderr> block.
+    assert result.output == "out\n<stderr>err</stderr>"
     assert result.exit_code == 0
     assert result.truncated is False
 
@@ -221,10 +221,28 @@ def test_download_not_found() -> None:
     response.raise_for_status.side_effect = err
     client._client_wrapper.httpx_client.request.return_value = response
 
-    responses = sb.download_files(["/missing.txt"])
+    # On failure the path is classified in the sandbox; here it doesn't exist.
+    with patch.object(sb, "execute", return_value=SimpleNamespace(output="missing")):
+        responses = sb.download_files(["/missing.txt"])
 
     assert responses[0].content is None
     assert responses[0].error == "file_not_found"
+
+
+def test_download_is_directory_via_500() -> None:
+    # Real Islo returns HTTP 500 for a directory download; we classify in-sandbox.
+    sb, client = _make_sandbox()
+    resp500 = MagicMock(status_code=500)
+    err = httpx.HTTPStatusError("boom", request=MagicMock(), response=resp500)
+    response = MagicMock()
+    response.raise_for_status.side_effect = err
+    client._client_wrapper.httpx_client.request.return_value = response
+
+    with patch.object(sb, "execute", return_value=SimpleNamespace(output="dir")):
+        responses = sb.download_files(["/work/somedir"])
+
+    assert responses[0].content is None
+    assert responses[0].error == "is_directory"
 
 
 def test_download_rejects_relative_path() -> None:

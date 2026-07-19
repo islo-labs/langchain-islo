@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.0.4
+
+- Standardized the backend interface: the poll knob is now
+  `sync_polling_interval` (a fixed delay **or** a callable of elapsed seconds),
+  and `execute()` formats stderr as a `<stderr>...</stderr>` block appended to
+  stdout. (`poll_interval` is renamed to `sync_polling_interval`.)
+
+## 0.0.3
+
+- `download_files`: when a download fails, classify the path inside the sandbox
+  so a directory is reported as `is_directory` and a missing path as
+  `file_not_found`, regardless of the provider's HTTP status. Fixes the
+  `SandboxIntegrationTests` directory-download case against live Islo, which
+  returns a generic `500` for directory downloads.
+
 ## 0.0.2
 
 - `execute()` now polls the Islo exec result directly instead of using the SDK's
